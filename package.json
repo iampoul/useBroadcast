@@ -25,5 +25,8 @@
     "@types/react": "^19.1.12",
     "react": "^19.1.1",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "broadcast-channel": "^7.1.0"
   }
 }

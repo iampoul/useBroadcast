@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import { BroadcastChannel, createLeaderElection, LeaderElector } from "broadcast-channel"
 
 export interface TabInfo {
   id: string
@@ -11,7 +12,6 @@ export interface TabInfo {
 export interface BroadcastOptions {
   channelName: string
   heartbeatInterval?: number
-  leaderCheckInterval?: number
   staleThreshold?: number
 }
 
@@ -20,12 +20,14 @@ export interface BroadcastHook {
   isLeader: boolean
   connectedTabs: TabInfo[]
   serverConnected: boolean
-  broadcast: (type: string, data?: any) => void
-  sendToLeader: (type: string, data: any) => void
+  setServerConnected: (isConnected: boolean) => void
+  broadcast: (type: string, payload?: any) => void
+  sendToLeader: (type: string, payload: any) => void
+  registerMessageHandler: (type: string, handler: (payload: any) => void) => () => void
 }
 
 export function useBroadcast(options: BroadcastOptions): BroadcastHook {
-  const { channelName, heartbeatInterval = 1000, leaderCheckInterval = 1500, staleThreshold = 3000 } = options
+  const { channelName, heartbeatInterval = 1000, staleThreshold = 3000 } = options
 
   const [tabId] = useState(() => Math.random().toString(36).substr(2, 9))
   const [isLeader, setIsLeader] = useState(false)
@@ -33,197 +35,163 @@ export function useBroadcast(options: BroadcastOptions): BroadcastHook {
   const [serverConnected, setServerConnected] = useState(false)
 
   const channelRef = useRef<BroadcastChannel | null>(null)
-  const heartbeatRef = useRef<NodeJS.Timeout | null>(null)
-  const leaderCheckRef = useRef<NodeJS.Timeout | null>(null)
-  const messageHandlersRef = useRef<Map<string, (data: any) => void>>(new Map())
-
-  const electLeader = useCallback(() => {
-    const now = Date.now()
-
-    setConnectedTabs((prev) => {
-      // Remove stale tabs
-      const activeTabs = prev.filter((tab) => now - tab.lastSeen < staleThreshold)
-
-      const currentTabIndex = activeTabs.findIndex((tab) => tab.id === tabId)
-      if (currentTabIndex >= 0) {
-        activeTabs[currentTabIndex].lastSeen = now
-      } else {
-        activeTabs.push({ id: tabId, isLeader: false, lastSeen: now })
-      }
-
-      // Check if we need a new leader
-      const currentLeader = activeTabs.find((tab) => tab.isLeader)
-
-      if (!currentLeader && activeTabs.length > 0) {
-        // Elect leader (lowest tabId wins for deterministic election)
-        const sortedTabs = [...activeTabs].sort((a, b) => a.id.localeCompare(b.id))
-        const newLeaderId = sortedTabs[0].id
-
-        // Broadcast leader election
-        channelRef.current?.postMessage({
-          type: "leader_elected",
-          tabId,
-          leaderId: newLeaderId,
-          timestamp: now,
-        })
-
-        const updatedTabs = activeTabs.map((tab) => ({
-          ...tab,
-          isLeader: tab.id === newLeaderId,
-        }))
-
-        const amILeader = tabId === newLeaderId
-        setIsLeader(amILeader)
-        setServerConnected(amILeader)
-
-        return updatedTabs
-      }
-
-      return activeTabs
-    })
-  }, [tabId, staleThreshold])
+  const electorRef = useRef<LeaderElector | null>(null)
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const messageHandlersRef = useRef<Map<string, (payload: any) => void>>(new Map())
 
   const broadcast = useCallback(
-    (type: string, data?: any) => {
+    (type: string, payload?: any) => {
       channelRef.current?.postMessage({
         type,
-        tabId,
-        timestamp: Date.now(),
-        ...data,
+        senderId: tabId,
+        ts: Date.now(),
+        payload,
       })
     },
     [tabId],
   )
 
   const sendToLeader = useCallback(
-    (type: string, data: any) => {
-      broadcast("message_to_leader", { messageType: type, data })
+    (type: string, payload: any) => {
+      broadcast("message_to_leader", { messageType: type, payload })
     },
     [broadcast],
   )
 
-  const registerMessageHandler = useCallback((type: string, handler: (data: any) => void) => {
+  const registerMessageHandler = useCallback((type: string, handler: (payload: any) => void) => {
     messageHandlersRef.current.set(type, handler)
     return () => messageHandlersRef.current.delete(type)
   }, [])
 
   useEffect(() => {
-    channelRef.current = new BroadcastChannel(channelName)
+    try {
+      channelRef.current = new BroadcastChannel(channelName)
+      electorRef.current = createLeaderElection(channelRef.current)
+    } catch (e) {
+      console.error("BroadcastChannel is not supported in this environment.")
+      // Provide a fallback to localStorage
+      // This is a simplified implementation and doesn't support all features
+      const listeners = new Map<string, (event: StorageEvent) => void>()
+      channelRef.current = {
+        postMessage: (data: any) => {
+          localStorage.setItem(channelName, JSON.stringify(data))
+        },
+        addEventListener: (type: string, listener: any) => {
+          const storageListener = (event: StorageEvent) => {
+            if (event.key === channelName && event.newValue) {
+              listener({ data: JSON.parse(event.newValue) })
+            }
+          }
+          window.addEventListener("storage", storageListener)
+          listeners.set(type, storageListener)
+        },
+        removeEventListener: (type: string) => {
+          const storageListener = listeners.get(type)
+          if (storageListener) {
+            window.removeEventListener("storage", storageListener)
+          }
+        },
+        close: () => {
+          listeners.forEach((listener) => {
+            window.removeEventListener("storage", listener)
+          })
+        },
+      } as any
+    }
 
     setConnectedTabs([{ id: tabId, isLeader: false, lastSeen: Date.now() }])
 
     const handleMessage = (event: MessageEvent) => {
-      const { type, tabId: senderTabId, timestamp, leaderId, messageType, data } = event.data
+      const { type, senderId, ts, payload } = event.data
+
+      if (senderId === tabId) return // Ignore messages from self
+
+      // Update last seen time for the sender
+      setConnectedTabs(prev => {
+        const now = Date.now()
+        const cleanedTabs = prev.filter(t => now - t.lastSeen < staleThreshold)
+        const existing = cleanedTabs.find(t => t.id === senderId)
+        if (existing) {
+          return cleanedTabs.map(t => t.id === senderId ? { ...t, lastSeen: ts } : t)
+        } else {
+          return [...cleanedTabs, { id: senderId, isLeader: false, lastSeen: ts }]
+        }
+      })
 
       switch (type) {
-        case "tab_announce":
-          setConnectedTabs((prev) => {
-            const existing = prev.find((tab) => tab.id === senderTabId)
-            if (existing) {
-              return prev.map((tab) => (tab.id === senderTabId ? { ...tab, lastSeen: timestamp } : tab))
-            }
-            return [...prev, { id: senderTabId, isLeader: false, lastSeen: timestamp }]
-          })
-          break
-
         case "leader_elected":
-          if (senderTabId !== tabId) {
-            // Only process leader elections from other tabs to avoid conflicts
-            const amILeader = tabId === leaderId
-            setIsLeader(amILeader)
-            setServerConnected(amILeader)
-            setConnectedTabs((prev) =>
-              prev.map((tab) => ({
-                ...tab,
-                isLeader: tab.id === leaderId,
-              })),
-            )
-          }
+          setIsLeader(false) // Another tab became leader
+          setConnectedTabs(prev => prev.map(t => ({ ...t, isLeader: t.id === payload.leaderId })))
           break
 
         case "message_to_leader":
-          // Check if current tab is leader and handle the message
-          setConnectedTabs((currentTabs) => {
-            const currentLeader = currentTabs.find((tab) => tab.id === tabId && tab.isLeader)
-            if (currentLeader && messageType) {
-              const handler = messageHandlersRef.current.get(messageType)
-              if (handler) {
-                handler(data)
-              }
+          if (isLeader) {
+            const handler = messageHandlersRef.current.get(payload.messageType)
+            if (handler) {
+              handler(payload.payload)
             }
-            return currentTabs
-          })
+          }
           break
 
         case "heartbeat":
-          setConnectedTabs((prev) => {
-            const existing = prev.find((tab) => tab.id === senderTabId)
-            if (existing) {
-              return prev.map((tab) => (tab.id === senderTabId ? { ...tab, lastSeen: timestamp } : tab))
-            }
-            return [...prev, { id: senderTabId, isLeader: false, lastSeen: timestamp }]
-          })
+          // Already handled above
           break
 
-        case "request_status":
-          // Respond with current status
-          broadcast("tab_announce")
+        case "tab_left":
+          setConnectedTabs(prev => prev.filter(t => t.id !== senderId))
           break
 
         default:
-          // Handle custom message types
           const handler = messageHandlersRef.current.get(type)
           if (handler) {
-            handler(event.data)
+            handler(payload)
           }
           break
       }
     }
 
-    channelRef.current.addEventListener("message", handleMessage)
+    channelRef.current?.addEventListener("message", handleMessage)
 
-    const announcePresence = () => {
-      broadcast("request_status")
-      setTimeout(() => {
-        broadcast("tab_announce")
-      }, 100)
+    const elector = electorRef.current
+    if (elector) {
+      elector.awaitLeadership().then(() => {
+        setIsLeader(true)
+        broadcast("leader_elected", { leaderId: tabId })
+        setConnectedTabs(prev => prev.map(t => ({ ...t, isLeader: t.id === tabId })))
+      })
     }
 
+    const handleBeforeUnload = () => {
+      broadcast("tab_left")
+      elector?.die()
+    }
 
-
-    announcePresence()
+    window.addEventListener("beforeunload", handleBeforeUnload)
 
     // Set up heartbeat
     heartbeatRef.current = setInterval(() => {
       broadcast("heartbeat")
     }, heartbeatInterval)
 
-    // Set up leader election check
-    leaderCheckRef.current = setInterval(() => {
-      electLeader()
-    }, leaderCheckInterval)
-
-    // Initial leader election
-    setTimeout(() => {
-      electLeader()
-    }, 500)
-
     return () => {
-      channelRef.current?.removeEventListener("message", handleMessage)
-      channelRef.current?.close()
+      window.removeEventListener("beforeunload", handleBeforeUnload)
+      if (channelRef.current) {
+        channelRef.current.removeEventListener("message", handleMessage)
+        channelRef.current.close()
+      }
+      elector?.die()
       if (heartbeatRef.current) clearInterval(heartbeatRef.current)
-      if (leaderCheckRef.current) clearInterval(leaderCheckRef.current)
     }
-  }, [channelName, tabId, heartbeatInterval, leaderCheckInterval, electLeader, broadcast])
+  }, [channelName, tabId, heartbeatInterval, staleThreshold, broadcast, isLeader])
 
   return {
     tabId,
     isLeader,
     connectedTabs,
     serverConnected,
+    setServerConnected,
     broadcast,
     sendToLeader,
-    // Expose the message handler registration for external use
     registerMessageHandler,
-  } as BroadcastHook & { registerMessageHandler: typeof registerMessageHandler }
+  }
 }
