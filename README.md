@@ -78,3 +78,19 @@ function App() {
 
 export default App;
 ```
+
+## Return Values
+
+The `useBroadcast` hook returns an object with the following properties:
+
+*   `tabId`: A unique identifier for the current tab.
+*   `isLeader`: A boolean that is `true` if the current tab is the leader, and `false` otherwise.
+*   `connectedTabs`: An array of objects, where each object represents a connected tab and has the following properties:
+    *   `id`: The unique identifier of the tab.
+    *   `isLeader`: A boolean that is `true` if the tab is the leader, and `false` otherwise.
+    *   `lastSeen`: The timestamp of the last time the tab was seen.
+*   `serverConnected`: A boolean that represents the status of the server connection. This is not managed by the hook, but is provided as a convenience for the user to track the server connection status.
+*   `setServerConnected`: A function that takes a boolean and sets the `serverConnected` state.
+*   `broadcast`: A function that takes a `type` and a `payload` and sends a message to all connected tabs.
+*   `sendToLeader`: A function that takes a `type` and a `payload` and sends a message to the leader tab.
+*   `registerMessageHandler`: A function that takes a `type` and a `handler` and registers a handler for a specific message type. It returns a function that can be called to unregister the handler.
