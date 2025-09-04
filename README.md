@@ -5,7 +5,7 @@ A React hook for cross-tab communication and leader election using the Broadcast
 ## Installation
 
 ```bash
-npm install use-broadcast
+npm install @iampoul/usebroadcast
 ```
 
 ## Usage
@@ -94,3 +94,7 @@ The `useBroadcast` hook returns an object with the following properties:
 *   `broadcast`: A function that takes a `type` and a `payload` and sends a message to all connected tabs.
 *   `sendToLeader`: A function that takes a `type` and a `payload` and sends a message to the leader tab.
 *   `registerMessageHandler`: A function that takes a `type` and a `handler` and registers a handler for a specific message type. It returns a function that can be called to unregister the handler.
+
+## Author
+
+*   **Poul Poulsen** - [https://x.com/iampoul](https://x.com/iampoul)

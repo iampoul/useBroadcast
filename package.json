@@ -1,6 +1,6 @@
 {
-  "name": "usebroadcast",
-  "version": "1.0.0",
+  "name": "@iampoul/usebroadcast",
+  "version": "1.0.1",
   "description": "A React hook for cross-tab communication and leader election using the Broadcast Channel API.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,10 +12,22 @@
     "type": "git",
     "url": "git+https://github.com/iampoul/useBroadcast.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "react",
+    "hook",
+    "broadcast-channel",
+    "cross-tab",
+    "leader-election"
+  ],
+  "author": {
+    "name": "Poul Poulsen",
+    "url": "https://x.com/iampoul"
+  },
   "license": "MIT",
   "type": "commonjs",
+  "files": [
+    "dist"
+  ],
   "bugs": {
     "url": "https://github.com/iampoul/useBroadcast/issues"
   },
