@@ -1,3 +1,5 @@
+[![Socket Badge](https://socket.dev/api/badge/npm/package/@iampoul/usebroadcast/1.0.1)](https://socket.dev/npm/package/@iampoul/usebroadcast/overview/1.0.1)
+
 # useBroadcast Hook
 
 A React hook for cross-tab communication and leader election using the Broadcast Channel API.
